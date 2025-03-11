@@ -1,0 +1,120 @@
+import os
+import re
+import csv
+import shutil
+from datetime import datetime
+
+# Directory settings
+LOG_DIR = "/path/to/sas_logs"  # Directory containing SAS log files
+PROCESSED_DIR = os.path.join(LOG_DIR, "processed")  # Directory for processed logs
+REPORT_FILE = "/path/to/output/sas_log_analysis.csv"  # CSV report file
+PROCESSED_RECORD_FILE = "/path/to/output/processed_files.txt"  # Track processed files
+
+# Ensure processed directory exists
+os.makedirs(PROCESSED_DIR, exist_ok=True)
+
+def extract_log_details(log_file_path):
+    """Extracts relevant details from a SAS log file."""
+    details = {
+        "Log File Name": os.path.basename(log_file_path),
+        "Date": datetime.now().strftime("%Y-%m-%d"),
+        "User ID": None,
+        "Start Time": None,
+        "End Time": None,
+        "Real Time": None,
+        "CPU Time": None,
+        "Libname": [],
+        "Engine": [],
+        "Data Read": [],
+        "Data Written": [],
+        "Folder Locations": [],
+        "Steps": [],
+        "Procs Used": [],
+        "Errors": [],
+        "Warnings": []
+    }
+    
+    with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        lines = f.readlines()
+    
+    for line in lines:
+        line = line.strip()
+        
+        # Extract execution times
+        if "real time" in line.lower():
+            details["Real Time"] = line.split(":")[-1].strip()
+        if "cpu time" in line.lower():
+            details["CPU Time"] = line.split(":")[-1].strip()
+        
+        # Extract user ID from log files
+        user_match = re.search(r'NOTE:\s*SAS System initialized by user:\s*(\w+)', line, re.IGNORECASE) or \
+                     re.search(r'Logged in as user:\s*(\w+)', line, re.IGNORECASE)
+        if user_match:
+            details["User ID"] = user_match.group(1)
+        
+        # Extract LIBNAME usage
+        lib_match = re.search(r'LIBNAME\s+(\w+)\s+ENGINE=(\w+)', line, re.IGNORECASE)
+        if lib_match:
+            details["Libname"].append(lib_match.group(1))
+            details["Engine"].append(lib_match.group(2))
+        
+        # Extract Data Read/Written (sample pattern, might need adjustments)
+        data_match = re.search(r'(\w+)\.(\w+)\s+used\s+(\d+)', line, re.IGNORECASE)
+        if data_match:
+            details["Data Read"].append(f"{data_match.group(1)}.{data_match.group(2)}")
+        
+        # Extract PROC usage
+        proc_match = re.search(r'PROC\s+(\w+)', line, re.IGNORECASE)
+        if proc_match:
+            details["Procs Used"].append(proc_match.group(1))
+        
+        # Extract Errors & Warnings
+        if "ERROR:" in line:
+            details["Errors"].append(line)
+        if "WARNING:" in line:
+            details["Warnings"].append(line)
+    
+    # Convert list items to comma-separated strings
+    for key in ["Libname", "Engine", "Data Read", "Data Written", "Steps", "Procs Used", "Errors", "Warnings"]:
+        details[key] = ", ".join(set(details[key]))
+    
+    return details
+
+def process_logs():
+    """Processes SAS log files one by one and updates the CSV report."""
+    processed_files = set()
+    
+    # Load already processed files
+    if os.path.exists(PROCESSED_RECORD_FILE):
+        with open(PROCESSED_RECORD_FILE, 'r') as f:
+            processed_files = set(f.read().splitlines())
+    
+    log_files = [f for f in os.listdir(LOG_DIR) if f.endswith(".log") and f not in processed_files]
+    
+    if not log_files:
+        print("No new log files to process.")
+        return
+    
+    for log_file in log_files:
+        log_path = os.path.join(LOG_DIR, log_file)
+        details = extract_log_details(log_path)
+        
+        # Append to CSV report
+        file_exists = os.path.exists(REPORT_FILE)
+        with open(REPORT_FILE, 'a', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=details.keys())
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(details)
+        
+        # Move processed file
+        shutil.move(log_path, os.path.join(PROCESSED_DIR, log_file))
+        
+        # Update processed files record
+        with open(PROCESSED_RECORD_FILE, 'a') as f:
+            f.write(log_file + '\n')
+        
+        print(f"Processed: {log_file}")
+
+if __name__ == "__main__":
+    process_logs()
